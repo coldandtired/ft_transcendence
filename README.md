@@ -42,6 +42,7 @@ The basic requirement is for an SPA (Single Page Application) where users can pl
     - The rest are for 2FA via email.
 - If you want to run the WAF tests you'll need to edit the HOST in waf/tests/waf_checks.sh.
 - Run `docker compose up --build` or if you have Make installed, `make`.
+- Go to https://localhost:3000 in your browser. For remote matches/tournaments you'll need to replace localhost with the IP address of the machine running the app.
 
 
 ## Screenshots
