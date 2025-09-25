@@ -1,0 +1,128 @@
+networks:
+  transcendence-net:
+    driver: bridge
+
+volumes:
+  vault-secrets: {}   # shared volume for rendered secrets vault-agent - app
+
+services:
+  # === APP (reads env rendered by Vault Agent) ===
+  app:
+    build: .
+    image: transcendence:latest
+    container_name: transcendence
+    # * app shall be accessible ONLY through our WAF proxy
+    # * (env_file is now removed; we now load env from /secrets/app.env at runtime)
+    # * port, host & db are mounted straight to the container, no fetch from the vault as they are not secrets :)
+    environment:
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      DB: "/data/transcendence.db"
+    volumes:
+      - vault-secrets:/secrets:ro
+    expose:
+      - "3000"
+    restart: unless-stopped
+    networks:
+      - transcendence-net
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+    # cmd to load /secrets/app.env into process env, then run the app
+    command: >
+      sh -c 'while [ ! -r /secrets/app.env ]; do sleep 0.5; done;
+         set -a; . /secrets/app.env; set +a;
+         exec node dist/app.js'
+
+  # === WAF ===
+  waf:
+    build: ./waf/
+    container_name: transcendence-waf
+    depends_on:
+      - app
+    environment:
+      BACKEND: "http://app:3000"
+      PORT: "8080"
+      SSL_PORT: "8443"
+      SERVER_NAME: "transcendence.nip.io"
+      NGINX_ALWAYS_TLS_REDIRECT: "on"
+      MODSEC_RULE_ENGINE: "on"
+      DETECTION_PARANOIA: "2"
+      BLOCKING_PARANOIA: "2"
+      ANOMALY_INBOUND: "5"
+      ANOMALY_OUTBOUND: "4"
+    ports:
+      - "3000:8443"
+    restart: unless-stopped
+    networks:
+      - transcendence-net
+
+  # === VAULT service ===
+  vault:
+    image: hashicorp/vault:1.20
+    container_name: transcendence-vault
+    command: >
+      server -dev
+      -dev-root-token-id=root
+      -dev-listen-address=0.0.0.0:8200
+    cap_add: [ "IPC_LOCK" ]
+    expose:
+      - "8200"
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_TOKEN: root
+    healthcheck:
+      test: ["CMD-SHELL", "vault status >/dev/null 2>&1 || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    restart: unless-stopped
+    networks:
+      - transcendence-net
+
+  # === seeder service, loads host .env to the vault ===
+  vault-init:
+    image: hashicorp/vault:1.20
+    depends_on:
+      vault:
+        condition: service_healthy
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: root
+    volumes:
+      - ./.env:/env/.env:ro
+    command: >
+      sh -c "vault kv put secret/app env=@/env/.env &&
+             echo 'Seeded Vault secret/app from .env'"
+    # writes one field env under path secret/app whose content is our entire .env file.
+    restart: "no"
+    networks:
+      - transcendence-net
+
+  # === Vault Agent: authenticates & renders /secrets/app.env from secret/app ===
+  vault-agent:
+    image: hashicorp/vault:1.20
+    depends_on:
+      vault:
+        condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
+    volumes:
+      - vault-secrets:/secrets
+      - ./hc_vault/vault-agent.hcl:/vault/config/agent.hcl:ro # -> vault agent config file
+      - ./hc_vault/.env.ctmpl:/vault/config/.env.ctmpl:ro # -> pulls the single env field and writes it as-is.
+    command: >
+      sh -c 'mkdir -p /secrets && chmod 0755 /secrets &&
+             printf "root" > /vault/token &&
+             vault agent -log-level=info -config=/vault/config/agent.hcl'
+    # ensure directory is traversable by app user
+    # write dev root token for auto_auth
+    healthcheck:
+      test: [ "CMD-SHELL", "[ -s /secrets/app.env ]" ]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+    restart: unless-stopped
+    networks:
+      - transcendence-net
+

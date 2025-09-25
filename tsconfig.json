@@ -1,0 +1,25 @@
+{
+	"compilerOptions": {
+		"target": "ES2021",
+		"module": "ESNext",
+		"moduleResolution": "node",
+		"outDir": "./dist",
+		"rootDir": "./src",
+		"baseUrl": "./src",
+		"esModuleInterop": true,
+		"allowJs": true,
+		"allowSyntheticDefaultImports": true,
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true,
+		"allowImportingTsExtensions": false,
+		"strict": false,
+		"paths": {
+			"@/*": ["frontend/*"]
+		}
+	},
+	"types": [
+        "babylonjs"
+    ],
+	"include": ["src/**/*"],
+	"exclude": ["node_modules", "dist"]
+}
